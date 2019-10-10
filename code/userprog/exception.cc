@@ -139,7 +139,9 @@ ExceptionHandler(ExceptionType which)
 			val = kernel->machine->ReadRegister(4);
 			{
 				char *filename = &(kernel->machine->mainMemory[val]);
+				DEBUG(dbgSys, "filename: " << filename << "\n");
 				status = SysOpen(filename);
+				DEBUG(dbgSys, "status: " << status << "\n");
 				kernel->machine->WriteRegister(2, (int) status);
 			}
 			kernel->machine->WriteRegister(PrevPCReg, kernel->machine->ReadRegister(PCReg));

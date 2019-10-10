@@ -68,7 +68,7 @@ class FileSystem {
     //  The OpenAFile function is used for kernel open system call
     OpenFileId OpenAFile(char *name) {
         int fileDescriptor = OpenForReadWrite(name, FALSE);
-        if (fileDescriptor == -1) return NULL;
+        if (fileDescriptor == -1) return -1;
         OpenFile *newFile = new OpenFile(fileDescriptor);
 
         for (int i=0; i<20; i++) {
