@@ -30,6 +30,7 @@ Kernel::Kernel(int argc, char **argv)
     debugUserProg = FALSE;
     consoleIn = NULL;          // default is stdin
     consoleOut = NULL;         // default is stdout
+    for (int i=0;i<NumPhysPages;i++) usedPhyMem[i] = 0;
 #ifndef FILESYS_STUB
     formatFlag = FALSE;
 #endif
@@ -253,7 +254,7 @@ void ForkExecute(Thread *t)
 	if ( !t->space->Load(t->getName()) ) {
     	return;             // executable not found
     }
-	
+
     t->space->Execute(t->getName());
 
 }
@@ -271,7 +272,7 @@ void Kernel::ExecAll()
 int Kernel::Exec(char* name)
 {
 	t[threadNum] = new Thread(name, threadNum);
-	t[threadNum]->space = new AddrSpace();
+	t[threadNum]->space = new AddrSpace(usedPhyMem);
 	t[threadNum]->Fork((VoidFunctionPtr) &ForkExecute, (void *)t[threadNum]);
 	threadNum++;
 

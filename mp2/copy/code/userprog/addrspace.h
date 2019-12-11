@@ -20,7 +20,7 @@
 
 class AddrSpace {
   public:
-    AddrSpace();			// Create an address space.
+    AddrSpace(int *);			// Create an address space.
     ~AddrSpace();			// De-allocate an address space
 
     bool Load(char *fileName);		// Load a program into addr space from
@@ -47,6 +47,9 @@ class AddrSpace {
 
     void InitRegisters();		// Initialize user-level CPU registers,
 					// before jumping to user code
+
+    int *usedPhyMemBackup;
+    int preIdx;
 
 };
 

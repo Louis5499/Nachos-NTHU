@@ -74,30 +74,30 @@ class FileSystem {
         for (int i=0; i<20; i++) {
             if (fileDescriptorTable[i] == NULL) {
                 fileDescriptorTable[i] = newFile;
-                return i;
+                return i+1;
             }
         }
         return -1;
     }
     int Write(char *buffer, int size, OpenFileId id){
-        OpenFile *opFile = fileDescriptorTable[id];
+        OpenFile *opFile = fileDescriptorTable[id-1];
         if (opFile == NULL) return -1;
 
         int numWritten = opFile->Write(buffer, size);
         return numWritten;
     }
     int Read(char *buffer, int size, OpenFileId id){
-        OpenFile *opFile = fileDescriptorTable[id];
+        OpenFile *opFile = fileDescriptorTable[id-1];
         if (opFile == NULL) return -1;
 
         int numRead = opFile->Read(buffer, size);
         return numRead;
     }
     int Close(OpenFileId id){
-        OpenFile *opFile = fileDescriptorTable[id];
+        OpenFile *opFile = fileDescriptorTable[id-1];
         if (opFile == NULL) return -1;
 
-        fileDescriptorTable[id] = NULL;
+        fileDescriptorTable[id-1] = NULL;
         return 1;
     }
 
