@@ -50,7 +50,8 @@
 // and the RS6000 needs to save 75 (!)
 // For simplicity, I just take the maximum over all architectures.
 
-#define MachineStateSize 75 
+#define MachineStateSize 75
+#define AgeTickUnit 1500
 
 
 // Size of the thread's private execution stack.
@@ -101,6 +102,22 @@ class Thread {
     void CheckOverflow();   	// Check if thread stack has overflowed
     void setStatus(ThreadStatus st) { status = st; }
     ThreadStatus getStatus() { return (status); }
+
+    int GetExecTick();
+    int GetLayer();
+    int GetPriority() { return priority; }
+    void SetPriority(int expected) { priority = expected; }
+    void SetInitialTick(int tick) { initialTick = tick; }
+    int AccumulatePriority(int addPriority);
+    void SetAgeInitialTick(int expected) { initialAgeTick = expected; }
+    int GetIsExceedAgeTime() { return totalAge >= 1500; }
+    void UpgradeTotalAgeTick();
+    void DecreaseTotalAge(int decreaseTick) { totalAge -= decreaseTick; }
+    int GetTotalAge() { return totalAge; }
+    double GetApproximateBurstTime();
+    int RecalculateBurstTime();
+    void TerminateBurstTimeCounting();
+
 	char* getName() { return (name); }
     
 	int getID() { return (ID); }
@@ -115,7 +132,14 @@ class Thread {
 				// (If NULL, don't deallocate stack)
     ThreadStatus status;	// ready, running or blocked
     char* name;
-	int   ID;
+	  int   ID;
+    int priority;
+    int initialTick;
+    double burstTime;
+    double predictTime;
+    double lastExecTime; // Only for debug use.
+    int initialAgeTick;
+    int totalAge; // Maximun is 1500
     void StackAllocate(VoidFunctionPtr func, void *arg);
     				// Allocate a stack for thread.
 				// Used internally by Fork()

@@ -209,6 +209,9 @@ AddrSpace::Execute(char* fileName)
     this->InitRegisters();		// set the initial register values
     this->RestoreState();		// load page table register
 
+    // kernel->currentThread->SetInitialTick(kernel->stats->totalTicks); // Set initial tick 
+    // DEBUG(dbgExpr, "[X] Set totalTick: " << kernel->stats->totalTicks);
+
     kernel->machine->Run();		// jump to the user progam
 
     ASSERTNOTREACHED();			// machine->Run never returns;

@@ -53,7 +53,7 @@ const int UserTick = 	   1;	// advance for each user-level instruction
 const int SystemTick =	  10; 	// advance each time interrupts are enabled
 const int RotationTime = 500; 	// time disk takes to rotate one sector
 const int SeekTime =	 500;  	// time disk takes to seek past one track
-const int ConsoleTime =	 100;	// time to read or write one character
+const int ConsoleTime =	 1;	// time to read or write one character
 const int NetworkTime =	 100;  	// time to send or receive one packet
 const int TimerTicks = 	 100;  	// (average) time between timer interrupts
 

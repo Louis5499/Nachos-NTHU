@@ -31,11 +31,20 @@ class Scheduler {
     void CheckToBeDestroyed();// Check if thread that had been
     				// running needs to be deleted
     void Print();		// Print contents of ready list
+
+    bool hasThreadInL1() { return !(L1->IsEmpty()); }
+    void AgingProcess();
+    void PerAgingProcess(List<Thread *> *cacheList, int currentLayer);
+    void PreemptiveCheck(Thread *newThread);
+    Thread* PutIntoQueue(int layerIdx, List<Thread *> *cacheList, Thread *newThread);
+    Thread* RemoveFromQueue(int layerIdx, List<Thread *> *cacheList, Thread *newThread);
     
     // SelfTest for scheduler is implemented in class Thread
     
   private:
-    List<Thread *> *readyList;  // queue of threads that are ready to run,
+    List<Thread *> *L1;  // queue of threads that are ready to run,
+    List<Thread *> *L2;  // queue of threads that are ready to run,
+    List<Thread *> *L3;  // queue of threads that are ready to run,
 				// but not running
     Thread *toBeDestroyed;	// finishing thread to be destroyed
     				// by the next thread that runs

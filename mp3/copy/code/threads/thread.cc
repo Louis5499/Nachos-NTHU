@@ -40,6 +40,13 @@ Thread::Thread(char* threadName, int threadID)
     stackTop = NULL;
     stack = NULL;
     status = JUST_CREATED;
+    priority = 0;
+    initialTick = 0;
+    burstTime = 0.0;
+    predictTime = 0.0;
+    lastExecTime = 0.0;
+    initialAgeTick = 0;
+    totalAge = 0;
     for (int i = 0; i < MachineStateSize; i++) {
 	machineState[i] = NULL;		// not strictly necessary, since
 					// new thread ignores contents 
@@ -178,6 +185,63 @@ Thread::Finish ()
     // not reached
 }
 
+int Thread::GetExecTick() {
+    if (burstTime <= 0) return lastExecTime; // means it has terminate (in waiting state), we grab the last execute result.
+    else return burstTime; // means it just stop (in ready state), we grab the current burst time.
+}
+
+// When Thread::Sleep(), running -> waiting
+void Thread::TerminateBurstTimeCounting() {
+    // Confirm burst time (execution time) first.
+    RecalculateBurstTime();
+
+    double newPredictTime = (double)(predictTime/2) + (double)(burstTime/2);
+    DEBUG(dbgExpr, "[D] Tick ["<< kernel->stats->totalTicks <<"]: Thread [" << ID << "] update approximate burst time, from: ["<< predictTime <<"], add ["<< burstTime <<"], to ["<< newPredictTime <<"]");
+    predictTime = newPredictTime;
+    lastExecTime = burstTime;
+    burstTime = 0.0;
+}
+
+// When Thread::Yield(), running -> ready OR When Thread::Sleep(), running -> waiting
+int Thread::RecalculateBurstTime () {
+    burstTime += (double)(kernel->stats->totalTicks - initialTick);
+    return burstTime;
+}
+
+
+double Thread::GetApproximateBurstTime() {
+    // We should get remaining burst time, not the original predict burst time.
+    // Because one thread could be preemptived when it's processing, 'predictTime - burstTime' can keep remaining time required to execute
+
+    // double burstTimeUntilNow = burstTime;
+    // // If current thread is executing, confirm current thread burst time first.
+    // if (kernel->currentThread == this) {
+    //     burstTimeUntilNow += (double)(kernel->stats->totalTicks - initialTick);
+    // }
+    // return (predictTime - burstTimeUntilNow) >= 0 ? (predictTime - burstTimeUntilNow): 0; // Make Sure not below 0
+    return predictTime; // According to Discuss Room, we don't need to check for "remaining approximate burst time", "approximate burst time" is good enough
+}
+
+int Thread::AccumulatePriority(int addPriority) {
+    if (priority + addPriority <= 149) priority += addPriority;
+    else priority = 149;
+    return priority;
+}
+
+void Thread::UpgradeTotalAgeTick() {
+    // Why direct add 100 ?
+    // 1. Prevent when first clock comes, this thread is not enough for 100.
+    // 2. Also useful when it's going to run, we can add remaining tick from last initial tick back to total age
+    // If above 149, stop upgrade
+    if (priority >= 149) return;
+    totalAge += kernel->stats->totalTicks - initialAgeTick;
+}
+
+int Thread::GetLayer() {
+    if (priority >= 100) return 1;
+    else if (priority >= 50 && priority <= 99) return 2;
+    else return 3;
+}
 
 //----------------------------------------------------------------------
 // Thread::Yield
@@ -206,11 +270,12 @@ Thread::Yield ()
     ASSERT(this == kernel->currentThread);
     
     DEBUG(dbgThread, "Yielding thread: " << name);
-    
+
+    kernel->scheduler->ReadyToRun(this); // We should put current thread into queue, in order to compare with thread in queue.
     nextThread = kernel->scheduler->FindNextToRun();
     if (nextThread != NULL) {
-	kernel->scheduler->ReadyToRun(this);
-	kernel->scheduler->Run(nextThread, FALSE);
+        RecalculateBurstTime(); // Confirm current thread burst time
+        kernel->scheduler->Run(nextThread, FALSE);
     }
     (void) kernel->interrupt->SetLevel(oldLevel);
 }
@@ -247,6 +312,7 @@ Thread::Sleep (bool finishing)
     DEBUG(dbgTraCode, "In Thread::Sleep, Sleeping thread: " << name << ", " << kernel->stats->totalTicks);
 
     status = BLOCKED;
+    TerminateBurstTimeCounting(); // oldThread start to calculate burst time
 	//cout << "debug Thread::Sleep " << name << "wait for Idle\n";
     while ((nextThread = kernel->scheduler->FindNextToRun()) == NULL) {
 		kernel->interrupt->Idle();	// no one to run, wait for an interrupt

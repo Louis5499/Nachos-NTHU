@@ -31,7 +31,9 @@
 
 Scheduler::Scheduler()
 { 
-    readyList = new List<Thread *>; 
+    L1 = new List<Thread *>; 
+    L2 = new List<Thread *>; 
+    L3 = new List<Thread *>; 
     toBeDestroyed = NULL;
 } 
 
@@ -42,7 +44,9 @@ Scheduler::Scheduler()
 
 Scheduler::~Scheduler()
 { 
-    delete readyList; 
+    delete L1;
+    delete L2;
+    delete L3; 
 } 
 
 //----------------------------------------------------------------------
@@ -60,7 +64,16 @@ Scheduler::ReadyToRun (Thread *thread)
     DEBUG(dbgThread, "Putting thread on ready list: " << thread->getName());
 	//cout << "Putting thread on ready list: " << thread->getName() << endl ;
     thread->setStatus(READY);
-    readyList->Append(thread);
+
+    int currentPriority = thread->GetPriority();
+    if (currentPriority >= 100) {
+        PutIntoQueue(1, L1, thread);
+    } else if (currentPriority >= 50 && currentPriority <= 99) {
+        PutIntoQueue(2, L2, thread);
+    } else {
+        PutIntoQueue(3, L3, thread);
+    }
+    thread->SetAgeInitialTick(kernel->stats->totalTicks);
 }
 
 //----------------------------------------------------------------------
@@ -74,12 +87,112 @@ Scheduler::ReadyToRun (Thread *thread)
 Thread *
 Scheduler::FindNextToRun ()
 {
+    // DEBUG(dbgExpr, "[X] FindNextToRun");
     ASSERT(kernel->interrupt->getLevel() == IntOff);
 
-    if (readyList->IsEmpty()) {
-		return NULL;
+    /// shareable variable
+    Thread *iterThread;
+    ListIterator<Thread *> *iter;
+    ///
+    if (!L1->IsEmpty()) {
+        // Preemptive SJF
+        Thread *approximateThread = L1->Front(); // Assign default value (The first element) to prevent segmentation fault
+        iter = new ListIterator<Thread *>(L1);
+        for (; !iter->IsDone(); iter->Next()) {
+            iterThread = iter->Item();
+            if (iterThread->GetApproximateBurstTime() < approximateThread->GetApproximateBurstTime()) {
+                approximateThread = iterThread;
+            }
+        }
+        return RemoveFromQueue(1, L1, approximateThread);
+    } else if (!L2->IsEmpty()) {
+        // Non-preemptive priority
+        Thread *highestPriorityThread = L2->Front();
+        iter = new ListIterator<Thread *>(L2);
+        for (; !iter->IsDone(); iter->Next()) {
+            iterThread = iter->Item();
+            if (iterThread->GetPriority() > highestPriorityThread->GetPriority()) {
+                highestPriorityThread = iterThread;
+            }
+        }
+        return RemoveFromQueue(2, L2, highestPriorityThread);
+    } else if (!L3->IsEmpty()) {
+        // Round-robin
+        return RemoveFromQueue(3, L3, L3->Front());
     } else {
-    	return readyList->RemoveFront();
+        return NULL;
+    }
+
+    // if (readyList->IsEmpty()) {
+	// 	return NULL;
+    // } else {
+    // 	return readyList->RemoveFront();
+    // }
+
+}
+
+Thread* Scheduler::PutIntoQueue(int layerIdx, List<Thread *> *cacheList, Thread *newThread) {
+    cacheList->Append(newThread);
+    DEBUG(dbgExpr, "[A] Tick ["<< kernel->stats->totalTicks <<"]: Thread [" << newThread->getID() << "] is inserted into queue L["<< layerIdx <<"]");
+    // If L1
+    //if (layerIdx == 1) PreemptiveCheck(newThread);
+    return newThread;
+}
+
+Thread* Scheduler::RemoveFromQueue(int layerIdx, List<Thread *> *cacheList, Thread *newThread) {
+    cacheList->Remove(newThread);
+    DEBUG(dbgExpr, "[B] Tick ["<< kernel->stats->totalTicks <<"]: Thread [" << newThread->getID() << "] is removed from queue L["<< layerIdx <<"]");
+    newThread->UpgradeTotalAgeTick(); // Calculate remaining tick from last check point, and add back to thread's total age.
+    newThread->SetAgeInitialTick(kernel->stats->totalTicks); // Keep current tick data to thread struct, it's useful when this thread is transfered in aging rather than go to execute.
+    return newThread;
+}
+
+// Executed when new thread is in L1
+// void Scheduler::PreemptiveCheck(Thread *newThread) {
+//     int currentThreadLayer = kernel->currentThread->GetLayer();
+//     if (currentThreadLayer == 1) {
+//         // If currrent thread is in L1, we need to compare current thread with new thread
+//         if (newThread->GetApproximateBurstTime() < kernel->currentThread->GetApproximateBurstTime()) {
+//             // Ready for Preemptive
+//             DEBUG(dbgExpr,"[X] A Preemptive: " << newThread->getID() << " B: " << kernel->currentThread->getID());
+//             kernel->interrupt->YieldOnReturn();
+//         }
+//     } else {
+//         // If current thread is not in L1, we can directly preemptive current thread
+//         kernel->interrupt->YieldOnReturn();
+//     }
+// }
+
+void Scheduler::AgingProcess() {
+    PerAgingProcess(L1, 1);
+    PerAgingProcess(L2, 2);
+    PerAgingProcess(L3, 3);
+}
+
+void Scheduler::PerAgingProcess(List<Thread *> *cacheList, int currentLayer) {
+    ListIterator<Thread *> *iter;
+    Thread *iterThread;
+    iter = new ListIterator<Thread *>(cacheList);
+    for (; !iter->IsDone(); iter->Next()) {
+        iterThread = iter->Item();
+        int foundPriority = iterThread->GetPriority();
+        iterThread->UpgradeTotalAgeTick(); // Add 100 to thread's total age tick ()
+        iterThread->SetAgeInitialTick(kernel->stats->totalTicks); // Keep current tick data to thread struct, it's useful when this thread is transfered to running state.
+        bool isExceedAgeTime = iterThread->GetIsExceedAgeTime(); // Whether this thread total waiting tick is above 1500
+        bool canStillAddPriority = foundPriority < 149;
+        if (isExceedAgeTime && canStillAddPriority) {
+            iterThread->DecreaseTotalAge(1500);
+            iterThread->AccumulatePriority(10);
+            DEBUG(dbgExpr, "[C] Tick ["<< kernel->stats->totalTicks <<"]: Thread [" << iterThread->getID() << "] changes its priority from ["<< foundPriority <<"] to ["<< iterThread->GetPriority() <<"]");
+            // Manage L3->L2 L2->L1
+            if (currentLayer == 3 && iterThread->GetPriority() >= 50) {
+                RemoveFromQueue(3, L3, iterThread);
+                PutIntoQueue(2, L2, iterThread);
+            } else if (currentLayer == 2 && iterThread->GetPriority() >= 100) {
+                RemoveFromQueue(2, L2, iterThread);
+                PutIntoQueue(1, L1, iterThread);
+            }
+        }
     }
 }
 
@@ -124,6 +237,8 @@ Scheduler::Run (Thread *nextThread, bool finishing)
     nextThread->setStatus(RUNNING);      // nextThread is now running
     
     DEBUG(dbgThread, "Switching from: " << oldThread->getName() << " to: " << nextThread->getName());
+    DEBUG(dbgExpr, "[E] Tick ["<< kernel->stats->totalTicks <<"]: Thread ["<< nextThread->getID() <<"] is now selected for execution, thread ["<< oldThread->getID() <<"] is replaced, and it has executed ["<< oldThread->GetExecTick() << "] ticks");
+    nextThread->SetInitialTick(kernel->stats->totalTicks);
     
     // This is a machine-dependent assembly language routine defined 
     // in switch.s.  You may have to think
@@ -133,6 +248,8 @@ Scheduler::Run (Thread *nextThread, bool finishing)
     SWITCH(oldThread, nextThread);
 
     // we're back, running oldThread
+    oldThread->SetInitialTick(kernel->stats->totalTicks); // Set initial tick 
+    
       
     // interrupts are off when we return from switch!
     ASSERT(kernel->interrupt->getLevel() == IntOff);
@@ -174,6 +291,10 @@ Scheduler::CheckToBeDestroyed()
 void
 Scheduler::Print()
 {
-    cout << "Ready list contents:\n";
-    readyList->Apply(ThreadPrint);
+    cout << "Ready list contents in L1:\n";
+    L1->Apply(ThreadPrint);
+    cout << "Ready list contents in L2:\n";
+    L2->Apply(ThreadPrint);
+    cout << "Ready list contents in L3:\n";
+    L3->Apply(ThreadPrint);
 }

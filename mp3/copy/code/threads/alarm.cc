@@ -48,8 +48,16 @@ Alarm::CallBack()
 {
     Interrupt *interrupt = kernel->interrupt;
     MachineStatus status = interrupt->getStatus();
+
+    // Because aging is 1500 per unit, timer is 100 per unit, it's ok to put here.
+    kernel->scheduler->AgingProcess();
     
     if (status != IdleMode) {
-	interrupt->YieldOnReturn();
+        int currentThreadLayer = kernel->currentThread->GetLayer();
+        bool hasThreadInL1 = kernel->scheduler->hasThreadInL1();
+        // In Layer 1 -> We check for the Preemptive.
+        // In Layer 3 -> We just do for round-robin.
+        // When kernel is in layer 2, and nothing in L1, We need to do non-preemptive logic.
+        if (currentThreadLayer == 1 || currentThreadLayer == 3 || hasThreadInL1) interrupt->YieldOnReturn();
     }
 }

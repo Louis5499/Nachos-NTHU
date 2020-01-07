@@ -30,6 +30,7 @@ Kernel::Kernel(int argc, char **argv)
     debugUserProg = FALSE;
     consoleIn = NULL;          // default is stdin
     consoleOut = NULL;         // default is stdout
+    for (int i=0;i<10;i++) priorities[i] = 0;
     for (int i=0;i<NumPhysPages;i++) usedPhyMem[i] = 0;
 #ifndef FILESYS_STUB
     formatFlag = FALSE;
@@ -49,7 +50,16 @@ Kernel::Kernel(int argc, char **argv)
 		} else if (strcmp(argv[i], "-e") == 0) {
         	execfile[++execfileNum]= argv[++i];
 			cout << execfile[execfileNum] << "\n";
-		} else if (strcmp(argv[i], "-ci") == 0) {
+        } else if (strcmp(argv[i], "-ep") == 0) {
+            ASSERT(i + 2 < argc);
+            execfile[++execfileNum]= argv[++i];
+            cout << execfile[execfileNum] << "\n";
+            char *numStr = argv[++i];
+            ASSERT(numStr[0] >= '0' && numStr[0] <= '9'); // Confirm it's a number string
+            int priority = atoi(numStr);
+            ASSERT(priority >= 0 && priority <= 149); // Confirm it's priority is in range
+            priorities[execfileNum] = priority;
+        } else if (strcmp(argv[i], "-ci") == 0) {
 	    	ASSERT(i + 1 < argc);
 	    	consoleIn = argv[i + 1];
 	    	i++;
@@ -112,8 +122,8 @@ Kernel::Initialize()
 #else
     fileSystem = new FileSystem(formatFlag);
 #endif // FILESYS_STUB
-    postOfficeIn = new PostOfficeInput(10);
-    postOfficeOut = new PostOfficeOutput(reliability);
+    // postOfficeIn = new PostOfficeInput(10);
+    // postOfficeOut = new PostOfficeOutput(reliability);
 
     interrupt->Enable();
 }
@@ -134,8 +144,8 @@ Kernel::~Kernel()
     delete synchConsoleOut;
     delete synchDisk;
     delete fileSystem;
-    delete postOfficeIn;
-    delete postOfficeOut;
+    // delete postOfficeIn;
+    // delete postOfficeOut;
     
     Exit(0);
 }
@@ -262,17 +272,18 @@ void ForkExecute(Thread *t)
 void Kernel::ExecAll()
 {
 	for (int i=1;i<=execfileNum;i++) {
-		int a = Exec(execfile[i]);
+		int a = Exec(execfile[i], priorities[i]);
 	}
 	currentThread->Finish();
     //Kernel::Exec();	
 }
 
 
-int Kernel::Exec(char* name)
+int Kernel::Exec(char* name, int priority)
 {
 	t[threadNum] = new Thread(name, threadNum);
 	t[threadNum]->space = new AddrSpace(usedPhyMem);
+    t[threadNum]->SetPriority(priority);
 	t[threadNum]->Fork((VoidFunctionPtr) &ForkExecute, (void *)t[threadNum]);
 	threadNum++;
 
