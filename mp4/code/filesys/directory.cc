@@ -24,6 +24,8 @@
 #include "filehdr.h"
 #include "directory.h"
 
+#define NumDirEntries   10
+
 //----------------------------------------------------------------------
 // Directory::Directory
 // 	Initialize a directory; initially, the directory is completely
@@ -42,8 +44,11 @@ Directory::Directory(int size)
 	memset(table, 0, sizeof(DirectoryEntry) * size);  // dummy operation to keep valgrind happy
 	
     tableSize = size;
-    for (int i = 0; i < tableSize; i++)
-	table[i].inUse = FALSE;
+    for (int i = 0; i < tableSize; i++) {
+        table[i].inUse = FALSE;
+        table[i].isDir = FALSE;
+    }
+
 }
 
 //----------------------------------------------------------------------
@@ -118,6 +123,11 @@ Directory::Find(char *name)
     return -1;
 }
 
+bool Directory::checkIfDir(char *name) {
+    int entryIndex = FindIndex(name);
+    return entryIndex >= 0 && table[entryIndex].isDir;
+}
+
 //----------------------------------------------------------------------
 // Directory::Add
 // 	Add a file into the directory.  Return TRUE if successful;
@@ -130,18 +140,20 @@ Directory::Find(char *name)
 //----------------------------------------------------------------------
 
 bool
-Directory::Add(char *name, int newSector)
+Directory::Add(char *name, int newSector, bool isDir)
 { 
     if (FindIndex(name) != -1)
 	return FALSE;
 
-    for (int i = 0; i < tableSize; i++)
+    for (int i = 0; i < tableSize; i++) {
         if (!table[i].inUse) {
             table[i].inUse = TRUE;
+            table[i].isDir = isDir;
             strncpy(table[i].name, name, FileNameMaxLen); 
             table[i].sector = newSector;
-        return TRUE;
-	}
+            return TRUE;
+	    }
+    }
     return FALSE;	// no space.  Fix when we have extensible files.
 }
 
@@ -168,13 +180,32 @@ Directory::Remove(char *name)
 // Directory::List
 // 	List all the file names in the directory. 
 //----------------------------------------------------------------------
+void Directory::List() {
+    for (int i = 0; i < tableSize; i++) {
+        if (table[i].inUse) {
+            char type = table[i].isDir ? 'D' : 'F';
+            printf("[%c]: %s\n", type, table[i].name);
+        }
 
-void
-Directory::List()
-{
-   for (int i = 0; i < tableSize; i++)
-	if (table[i].inUse)
-	    printf("%s\n", table[i].name);
+    }
+}
+
+void Directory::RecursiveList() {
+    Directory *subDirectory = new Directory(NumDirEntries);	
+	OpenFile *tempOpenFile;
+
+    for (int i = 0; i < tableSize; i++) {
+        if (table[i].inUse) {
+            char type = table[i].isDir ? 'D' : 'F';
+            printf("[%c]: %s\n", type, table[i].name);
+            if (table[i].isDir) {
+                tempOpenFile = new OpenFile(table[i].sector);
+                subDirectory->FetchFrom(tempOpenFile);
+                subDirectory->RecursiveList();
+            }
+        }
+
+    }
 }
 
 //----------------------------------------------------------------------

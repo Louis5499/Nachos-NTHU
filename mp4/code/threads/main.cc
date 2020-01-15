@@ -97,16 +97,21 @@ Copy(char *from, char *to)
     Lseek(fd, 0, 0);
 
 // Create a Nachos file of the same length
+
+    char keepOriginalTemp[260] = { '/0' };
+    strcpy(keepOriginalTemp, to); // Because "to" will be modified during the Create function
+
     DEBUG('f', "Copying file " << from << " of size " << fileLength <<  " to file " << to);
     if (!kernel->fileSystem->Create(to, fileLength)) {   // Create Nachos file
         printf("Copy: couldn't create output file %s\n", to);
         Close(fd);
         return;
     }
+    strcpy(to, keepOriginalTemp);
     
     openFile = kernel->fileSystem->Open(to);
     ASSERT(openFile != NULL);
-    
+
 // Copy the data in TransferSize chunks
     buffer = new char[TransferSize];
     while ((amountRead=ReadPartial(fd, buffer, sizeof(char)*TransferSize)) > 0)
@@ -156,6 +161,7 @@ static void
 CreateDirectory(char *name)
 {
 	// MP4 Assignment
+    kernel->fileSystem->CreateDirectory(name);
 }
 
 //----------------------------------------------------------------------
@@ -309,7 +315,7 @@ main(int argc, char **argv)
 
 #ifndef FILESYS_STUB
     if (removeFileName != NULL) {
-		kernel->fileSystem->Remove(removeFileName);
+        kernel->fileSystem->Remove(removeFileName, recursiveRemoveFlag);
     }
     if (copyUnixFileName != NULL && copyNachosFileName != NULL) {
 		Copy(copyUnixFileName,copyNachosFileName);
@@ -318,7 +324,7 @@ main(int argc, char **argv)
 		kernel->fileSystem->Print();
     }
     if (dirListFlag) {
-		kernel->fileSystem->List();
+        kernel->fileSystem->List(listDirectoryName, recursiveListFlag);
     }
 	if (mkdirFlag) {
 		// MP4 mod tag

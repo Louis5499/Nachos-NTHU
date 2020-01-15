@@ -48,7 +48,6 @@
 #include "debug.h"
 #include "disk.h"
 #include "pbitmap.h"
-#include "directory.h"
 #include "filehdr.h"
 #include "filesys.h"
 
@@ -57,13 +56,6 @@
 // sectors, so that they can be located on boot-up.
 #define FreeMapSector 		0
 #define DirectorySector 	1
-
-// Initial file sizes for the bitmap and directory; until the file system
-// supports extensible files, the directory size sets the maximum number 
-// of files that can be loaded onto the disk.
-#define FreeMapFileSize 	(NumSectors / BitsInByte)
-#define NumDirEntries 		10
-#define DirectoryFileSize 	(sizeof(DirectoryEntry) * NumDirEntries)
 
 //----------------------------------------------------------------------
 // FileSystem::FileSystem
@@ -130,6 +122,7 @@ FileSystem::FileSystem(bool format)
 			freeMap->Print();
 			directory->Print();
         }
+        currentOpenFile = NULL;
         delete freeMap; 
 		delete directory; 
 		delete mapHdr; 
@@ -181,44 +174,91 @@ FileSystem::~FileSystem()
 //	"initialSize" -- size of file to be created
 //----------------------------------------------------------------------
 
+TraverseFile* FileSystem::GetTraverseFileByName(char *name) {
+    TraverseFile *traverseFile = new TraverseFile();
+    Directory *directory = new Directory(NumDirEntries);
+    OpenFile *tempOpenFile = directoryFile; // Start from root
+    int foundSector = DirectorySector; // Start from root
+    int belongSector = DirectorySector;
+    int memoryForLastBelongSector; // When we traverse the directory, not file, the var "belongSector" will get wrong, the true belongSector is the above layer of belongSector
+    char *finalName = "";
+
+    directory->FetchFrom(tempOpenFile);
+
+    char *pch = strtok(name, "/"); // Because path is seperated by '/'
+    while(pch != NULL) {
+        // Try to find the directory is existed or not
+        finalName = pch;
+        foundSector = directory->Find(pch);
+        if (foundSector < 0 || !directory->checkIfDir(pch)) {
+            // Means not exists, we need to break while loop, and construct the subDirectory / file
+            break;
+        }
+        // Link to next directory
+        tempOpenFile = new OpenFile(foundSector);
+        directory->FetchFrom(tempOpenFile);
+        memoryForLastBelongSector = belongSector;
+        belongSector = foundSector;
+        pch = strtok(NULL, "/");
+    }
+    traverseFile->directory = directory;
+    strcpy(traverseFile->finalName, finalName);
+    traverseFile->finalSector = foundSector;
+    traverseFile->isDir = (belongSector == foundSector);
+    // When traversed inode is dir, we need to find above them.
+    traverseFile->belongSector = traverseFile->isDir ? memoryForLastBelongSector : belongSector;
+
+    DEBUG('f', "traverse name: " << traverseFile->finalName);
+    DEBUG('f', "traverse sector: " << traverseFile->finalSector);
+    DEBUG('f', "traverse original sector: " << traverseFile->belongSector);
+
+    return traverseFile;
+}
+
 bool
 FileSystem::Create(char *name, int initialSize)
 {
+    TraverseFile *traverseFile;
     Directory *directory;
     PersistentBitmap *freeMap;
     FileHeader *hdr;
     int sector;
+    char *finalName;
     bool success;
 
     DEBUG(dbgFile, "Creating file " << name << " size " << initialSize);
+    traverseFile = GetTraverseFileByName(name);
+    directory = traverseFile->directory;
+    finalName = traverseFile->finalName;
+    OpenFile *belongDirOpenFile = new OpenFile(traverseFile->belongSector);
 
-    directory = new Directory(NumDirEntries);
-    directory->FetchFrom(directoryFile);
-
-    if (directory->Find(name) != -1)
-      success = FALSE;			// file is already in directory
-    else {	
+    if (directory->Find(finalName) != -1) {
+        success = FALSE;			// file is already in directory
+    } else {	
         freeMap = new PersistentBitmap(freeMapFile,NumSectors);
         sector = freeMap->FindAndSet();	// find a sector to hold the file header
-    	if (sector == -1) 		
+    	if (sector == -1) {	
             success = FALSE;		// no free block for file header 
-        else if (!directory->Add(name, sector))
+        }
+        else if (!directory->Add(finalName, sector, false)) {
             success = FALSE;	// no space in directory
-	else {
-    	    hdr = new FileHeader;
-	    if (!hdr->Allocate(freeMap, initialSize))
-            	success = FALSE;	// no space on disk for data
-	    else {	
-	    	success = TRUE;
-		// everthing worked, flush all changes back to disk
-    	    	hdr->WriteBack(sector); 		
-    	    	directory->WriteBack(directoryFile);
-    	    	freeMap->WriteBack(freeMapFile);
-	    }
+        }
+	    else {
+            hdr = new FileHeader;
+            if (!hdr->Allocate(freeMap, initialSize)) {
+                success = FALSE;	// no space on disk for data
+            } else {	
+                success = TRUE;
+                // everthing worked, flush all changes back to disk
+                hdr->WriteBack(sector); 		
+                directory->WriteBack(belongDirOpenFile);
+                freeMap->WriteBack(freeMapFile);
+            }
             delete hdr;
-	}
+	    }
         delete freeMap;
     }
+
     delete directory;
     return success;
 }
@@ -236,17 +276,72 @@ FileSystem::Create(char *name, int initialSize)
 OpenFile *
 FileSystem::Open(char *name)
 { 
+    TraverseFile *traverseFile;
     Directory *directory = new Directory(NumDirEntries);
     OpenFile *openFile = NULL;
     int sector;
 
-    DEBUG(dbgFile, "Opening file" << name);
-    directory->FetchFrom(directoryFile);
-    sector = directory->Find(name); 
-    if (sector >= 0) 		
-	openFile = new OpenFile(sector);	// name was found in directory 
+    traverseFile = GetTraverseFileByName(name);
+    openFile = new OpenFile(traverseFile->finalSector);
+
+    return openFile;
+}
+
+OpenFileId FileSystem::OpenAFile(char *name) {
+    currentOpenFile = Open(name);
+    return 1; // Becasue nachos only allow to accept one file open.
+}
+
+int FileSystem::CloseAFile() {
+    currentOpenFile = NULL;
+    return 1;
+}
+
+bool FileSystem::CreateDirectory(char *name) {
+    TraverseFile *traverseFile;
+    Directory *directory;
+    PersistentBitmap *freeMap;
+    FileHeader *dirHdr = new FileHeader;
+    int newSector;
+    bool success = true;
+    char *pch;
+
+    // Get the root directory first && the filename in path (e.g. /a/b.png  => b.png)
+    traverseFile = GetTraverseFileByName(name);
+    directory = traverseFile->directory;
+    pch = traverseFile->finalName;
+    OpenFile *belongDirOpenFile = new OpenFile(traverseFile->belongSector);
+
+    // Out from while loop, which means we're going to construct subDirectory
+    // 1. Find free sector
+    freeMap = new PersistentBitmap(freeMapFile, NumSectors);
+    newSector = freeMap->FindAndSet();	// find a sector to hold the file header
+    if (newSector == -1) success = FALSE;
+
+    // 2. link subDirectory to original directory
+    if (!directory->Add(pch, newSector, true)) success = FALSE;
+
+    // 3. Build up subDirectory <File Header>
+    dirHdr->Allocate(freeMap, DirectoryFileSize);
+    dirHdr->WriteBack(newSector);
+
+    // 4. Build up subDirectory <Directory>
+    Directory *subDirectory = new Directory(NumDirEntries);
+    OpenFile* newDirectoryFile = new OpenFile(newSector);
+    subDirectory->WriteBack(newDirectoryFile);
+
+    // 5. Update directory / freeMap on disk
+    directory->WriteBack(belongDirOpenFile);
+    freeMap->WriteBack(freeMapFile);
+
+    // 6. Free local storage
     delete directory;
-    return openFile;				// return NULL if not found
+    delete subDirectory;
+    delete freeMap;
+    delete dirHdr;
+    delete newDirectoryFile;
+
+    return success;
 }
 
 //----------------------------------------------------------------------
@@ -264,16 +359,42 @@ FileSystem::Open(char *name)
 //----------------------------------------------------------------------
 
 bool
-FileSystem::Remove(char *name)
+FileSystem::Remove(char *name, bool shouldRecursive)
 { 
+    TraverseFile *traverseFile;
     Directory *directory;
     PersistentBitmap *freeMap;
     FileHeader *fileHdr;
     int sector;
+    char *finalName;
+    char pwd[260],buffer[260];
+
+    traverseFile = GetTraverseFileByName(name);
+    directory = traverseFile->directory;
+
+    // Check whether should recursive search
+    if (shouldRecursive && traverseFile->isDir) {
+        DirectoryEntry *table = directory->GetTable();
+        strcpy(pwd, name);
+        for (int i=0; i<directory->GetTableSize(); i++) {
+            if (table[i].inUse) {
+                sprintf(buffer, "%s/%s", pwd, table[i].name);
+                Remove(buffer, true);
+            }
+        }
+        // Redirect directory to directory above current.
+        // Why?
+        // e.g. We're deleting "/abc"
+        // current directory is point to "/abc"
+        // But what we need is "/" 
+        OpenFile *tempOpenFile = new OpenFile(traverseFile->belongSector);
+        directory->FetchFrom(tempOpenFile);
+    }
     
-    directory = new Directory(NumDirEntries);
-    directory->FetchFrom(directoryFile);
-    sector = directory->Find(name);
+    sector = traverseFile->finalSector;
+    finalName = traverseFile->finalName;
+    OpenFile *belongDirOpenFile = new OpenFile(traverseFile->belongSector);
+
     if (sector == -1) {
        delete directory;
        return FALSE;			 // file not found 
@@ -285,10 +406,10 @@ FileSystem::Remove(char *name)
 
     fileHdr->Deallocate(freeMap);  		// remove data blocks
     freeMap->Clear(sector);			// remove header block
-    directory->Remove(name);
+    directory->Remove(finalName);
 
     freeMap->WriteBack(freeMapFile);		// flush to disk
-    directory->WriteBack(directoryFile);        // flush to disk
+    directory->WriteBack(belongDirOpenFile);        // flush to disk
     delete fileHdr;
     delete directory;
     delete freeMap;
@@ -300,13 +421,15 @@ FileSystem::Remove(char *name)
 // 	List all the files in the file system directory.
 //----------------------------------------------------------------------
 
-void
-FileSystem::List()
-{
+void FileSystem::List(char *name, bool shouldRecursive) {
+    TraverseFile *traverseFile;
     Directory *directory = new Directory(NumDirEntries);
+    traverseFile = GetTraverseFileByName(name);
+    directory = traverseFile->directory;
 
-    directory->FetchFrom(directoryFile);
-    directory->List();
+    if (shouldRecursive) directory->RecursiveList();
+    else directory->List();
+
     delete directory;
 }
 
@@ -345,6 +468,7 @@ FileSystem::Print()
     delete dirHdr;
     delete freeMap;
     delete directory;
-} 
+}
+
 
 #endif // FILESYS_STUB

@@ -66,20 +66,57 @@ FileHeader::~FileHeader()
 //	"fileSize" is the bit map of free disk sectors
 //----------------------------------------------------------------------
 
+void FileHeader::MultiLayerAlloc(PersistentBitmap *freeMap, int fileSize, int maxFileSize) {
+	int i = 0;
+	for (i = 0; i < numSectors; i++) {
+		dataSectors[i] = freeMap->FindAndSet();
+		FileHeader *subHdr = new FileHeader;
+
+		int nextStorageSize;
+		if (fileSize >= maxFileSize) {
+			nextStorageSize = maxFileSize;
+		} else {
+			nextStorageSize = fileSize;
+		}
+		subHdr->Allocate(freeMap, nextStorageSize);
+		fileSize -= nextStorageSize;
+		subHdr->WriteBack(dataSectors[i]);
+
+		if (fileSize <= 0) break;
+	}
+	numSectors = i+1; // Real allocated num
+}
+
 bool
 FileHeader::Allocate(PersistentBitmap *freeMap, int fileSize)
 { 
-    numBytes = fileSize;
-    numSectors  = divRoundUp(fileSize, SectorSize);
-    if (freeMap->NumClear() < numSectors)
-	return FALSE;		// not enough space
+	numBytes = fileSize;
+	int totalSectors = divRoundUp(fileSize, SectorSize);
+	numSectors = totalSectors > NumDirect ? NumDirect : totalSectors; // numSectors only contains this directory sector number
+	if (freeMap->NumClear() < numSectors) return FALSE;		// not enough space
 
-    for (int i = 0; i < numSectors; i++) {
-	dataSectors[i] = freeMap->FindAndSet();
-	// since we checked that there was enough free space,
-	// we expect this to succeed
-	ASSERT(dataSectors[i] >= 0);
-    }
+	
+	if (fileSize > MaxFileSize3) {
+		// need 4 layers to memory => 64 MB
+		MultiLayerAlloc(freeMap, fileSize, MaxFileSize3);
+	}
+	else if (fileSize > MaxFileSize2) {
+		// need 3 layers to memory => 4 MB
+		MultiLayerAlloc(freeMap, fileSize, MaxFileSize2);
+	}
+	else if (fileSize > MaxFileSize1) {
+		// need 2 layers to memory => 64 KB
+		MultiLayerAlloc(freeMap, fileSize, MaxFileSize1);
+	} else {
+		// need 1 layers to memory => 4 KB
+		for (int i = 0; i < numSectors; i++) {
+			dataSectors[i] = freeMap->FindAndSet();
+
+			// since we checked that there was enough free space,
+			// we expect this to succeed
+			ASSERT(dataSectors[i] >= 0);
+		}
+	}
     return TRUE;
 }
 
@@ -89,14 +126,22 @@ FileHeader::Allocate(PersistentBitmap *freeMap, int fileSize)
 //
 //	"freeMap" is the bit map of free disk sectors
 //----------------------------------------------------------------------
-
-void 
-FileHeader::Deallocate(PersistentBitmap *freeMap)
+void FileHeader::Deallocate(PersistentBitmap *freeMap)
 {
-    for (int i = 0; i < numSectors; i++) {
-	ASSERT(freeMap->Test((int) dataSectors[i]));  // ought to be marked!
-	freeMap->Clear((int) dataSectors[i]);
-    }
+	if (numBytes > MaxFileSize1) {
+		// MaxFileSize1, MaxFileSize2, MaxFileSize3 are all need to go through it.
+		for (int i = 0; i < numSectors; i++){
+			DEBUG('f', "free: " << dataSectors[i]);
+			FileHeader *subhdr = new FileHeader;
+			subhdr->FetchFrom(dataSectors[i]);
+			subhdr->Deallocate(freeMap);
+		}
+	} else {
+		for (int i = 0; i < numSectors; i++) {
+			ASSERT(freeMap->Test((int) dataSectors[i]));  // ought to be marked!
+			freeMap->Clear((int) dataSectors[i]);
+		}
+	}
 }
 
 //----------------------------------------------------------------------
@@ -151,10 +196,20 @@ FileHeader::WriteBack(int sector)
 //	"offset" is the location within the file of the byte in question
 //----------------------------------------------------------------------
 
-int
-FileHeader::ByteToSector(int offset)
+int FileHeader::PerByteToSectorCalc(int offset, int maxFileSize) {
+	int which = -1;
+	which = divRoundDown(offset, maxFileSize);
+	FileHeader *subhdr = new FileHeader;
+	subhdr->FetchFrom(dataSectors[which]);
+	return subhdr->ByteToSector(offset - maxFileSize*which);
+}
+
+int FileHeader::ByteToSector(int offset)
 {
-    return(dataSectors[offset / SectorSize]);
+	if (numBytes > MaxFileSize3) return PerByteToSectorCalc(offset, MaxFileSize3);
+	else if (numBytes > MaxFileSize2) return PerByteToSectorCalc(offset, MaxFileSize2);
+	else if (numBytes > MaxFileSize1) return PerByteToSectorCalc(offset, MaxFileSize1);
+    return (dataSectors[offset / SectorSize]);
 }
 
 //----------------------------------------------------------------------
@@ -174,25 +229,37 @@ FileHeader::FileLength()
 //	the data blocks pointed to by the file header.
 //----------------------------------------------------------------------
 
-void
-FileHeader::Print()
-{
-    int i, j, k;
-    char *data = new char[SectorSize];
-
-    printf("FileHeader contents.  File size: %d.  File blocks:\n", numBytes);
-    for (i = 0; i < numSectors; i++)
-	printf("%d ", dataSectors[i]);
-    printf("\nFile contents:\n");
-    for (i = k = 0; i < numSectors; i++) {
-	kernel->synchDisk->ReadSector(dataSectors[i], data);
-        for (j = 0; (j < SectorSize) && (k < numBytes); j++, k++) {
-	    if ('\040' <= data[j] && data[j] <= '\176')   // isprint(data[j])
-		printf("%c", data[j]);
-            else
-		printf("\\%x", (unsigned char)data[j]);
+void FileHeader::PerMutiPrint() {
+	for (int i = 0; i < numSectors; i++){
+		printf("this level hdr: %d\n", dataSectors[i]);
+		OpenFile *openfile = new OpenFile(dataSectors[i]);
+		FileHeader *subhdr = openfile->getHdr();
+		subhdr->Print();
 	}
-        printf("\n"); 
-    }
-    delete [] data;
+}
+
+void FileHeader::Print() {
+    printf("FileHeader contents.  File size: %d.  File blocks:\n", numBytes);
+	if (numBytes > MaxFileSize1) {
+		// MaxFileSize1, MaxFileSize2, MaxFileSize3 are all need to go through it.
+		PerMutiPrint();
+	} else {
+		int i, j, k;
+    	char *data = new char[SectorSize];
+		for (i = 0; i < numSectors; i++) printf("%d ", dataSectors[i]);
+
+		printf("\nFile contents:\n");
+		for (i = k = 0; i < numSectors; i++) {
+			kernel->synchDisk->ReadSector(dataSectors[i], data);
+			for (j = 0; (j < SectorSize) && (k < numBytes); j++, k++) {
+				if ('\040' <= data[j] && data[j] <= '\176'){  // isprint(data[j])
+					printf("%c", data[j]);
+				} else {
+					printf("\\%x", (unsigned char)data[j]);
+				}
+			}
+			printf("\n"); 
+		}
+		delete [] data;
+	}
 }

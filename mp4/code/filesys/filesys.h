@@ -36,6 +36,14 @@
 #include "copyright.h"
 #include "sysdep.h"
 #include "openfile.h"
+#include "directory.h"
+
+// Initial file sizes for the bitmap and directory; until the file system
+// supports extensible files, the directory size sets the maximum number 
+// of files that can be loaded onto the disk.
+#define FreeMapFileSize 	(NumSectors / BitsInByte)
+#define NumDirEntries 		10
+#define DirectoryFileSize 	(sizeof(DirectoryEntry) * NumDirEntries)
 
 typedef int OpenFileId;
 
@@ -68,6 +76,23 @@ class FileSystem {
 };
 
 #else // FILESYS
+
+class TraverseFile {
+	public:
+		TraverseFile() {
+			directory = new Directory(NumDirEntries);
+		}
+		~TraverseFile() {
+			delete directory;
+		}
+
+		Directory *directory;
+		int finalSector; // the file/subdirectory sector
+		int belongSector; // directory sector that the file/subDirectory belongs to
+		bool isDir;
+		char finalName[15];
+};
+
 class FileSystem {
   public:
     FileSystem(bool format);		// Initialize the file system.
@@ -84,12 +109,22 @@ class FileSystem {
 
     OpenFile* Open(char *name); 	// Open a file (UNIX open)
 
-    bool Remove(char *name);  		// Delete a file (UNIX unlink)
+	///
+	OpenFileId OpenAFile(char *name);
+	int CloseAFile();
+	///
 
-    void List();			// List all the files in the file system
+    bool Remove(char *name, bool shouldRecursive);  		// Delete a file (UNIX unlink)
+
+    void List(char *name, bool shouldRecursive);			// List all the files in the file system
 
     void Print();			// List all the files and their contents
 
+	///
+	OpenFile* currentOpenFile;
+	bool CreateDirectory(char *name);
+	TraverseFile* GetTraverseFileByName(char *name);
+	///
   private:
    OpenFile* freeMapFile;		// Bit map of free disk blocks,
 					// represented as a file

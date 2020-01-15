@@ -18,7 +18,18 @@
 #include "pbitmap.h"
 
 #define NumDirect 	((SectorSize - 2 * sizeof(int)) / sizeof(int))
-#define MaxFileSize 	(NumDirect * SectorSize)
+
+/**
+ * In original view
+ * MaxFileSize1 means only one layer file header -> 2^(5+7) = 4KB
+ * MaxFileSize2 means two layer file headers -> 2^(5+5+7) = 64KB
+ * MaxFileSize3 means three layer file headers -> 2^(5+5+5+7) = 4 MB
+ * MaxFileSize4 means four layer file headers -> 2^(5+5+5+5+7) = 64 MB
+ **/
+#define MaxFileSize1	(NumDirect * SectorSize)
+#define MaxFileSize2	(NumDirect * NumDirect * SectorSize)
+#define MaxFileSize3	(NumDirect * NumDirect * NumDirect * SectorSize)
+#define MaxFileSize4	(NumDirect * NumDirect * NumDirect * NumDirect * SectorSize)
 
 // The following class defines the Nachos "file header" (in UNIX terms,  
 // the "i-node"), describing where on disk to find all of the data in the file.
@@ -60,6 +71,11 @@ class FileHeader {
 
     void Print();			// Print the contents of the file.
 
+	///
+	void PerMutiPrint();
+	int PerByteToSectorCalc(int offset, int maxFileSize);
+	void MultiLayerAlloc(PersistentBitmap *freeMap, int fileSize, int maxFileSize);
+	///
   private:
 	
 	/*
@@ -76,7 +92,6 @@ class FileHeader {
 		In-core part - none
 		
 	*/
-	
     int numBytes;			// Number of bytes in the file
     int numSectors;			// Number of data sectors in the file
     int dataSectors[NumDirect];		// Disk sector numbers for each data 
